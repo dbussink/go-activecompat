@@ -30,7 +30,7 @@ func setupME(t *testing.T) (MessageVerifier, MessageEncryptor, []byte, []byte) {
 	// class default is false (non-auth), so we use that here
 	// see: https://github.com/rails/rails/blob/v5.2.3/activesupport/lib/active_support/message_encryptor.rb#L85
 	// tests below expect this one to be using MessageVerifier under the hood.
-	encryptor := NewMessageEncryptor(secret, secret, RailsDefaultNonAuthenticatedMessageEncryptionCipher)
+	encryptor, _ := NewMessageEncryptor(secret, secret, RailsDefaultNonAuthenticatedMessageEncryptionCipher)
 	assert.NotNil(t, encryptor)
 
 	return verifier, encryptor, dataBytes, secret
@@ -103,7 +103,7 @@ func TestBackwardsCompatFor64BytesKey(t *testing.T) {
 	secret, err := hex.DecodeString("3942b1bf81e622559ed509e3ff274a780784fe9e75b065866bd270438c74da822219de3156473cc27df1fd590e4baf68c95eeb537b6e4d4c5a10f41635b5597e")
 	assert.Nil(t, err)
 
-	encryptor := NewMessageEncryptor(secret[0:32], secret, RailsDefaultNonAuthenticatedMessageEncryptionCipher)
+	encryptor, _ := NewMessageEncryptor(secret[0:32], secret, RailsDefaultNonAuthenticatedMessageEncryptionCipher)
 	assert.NotNil(t, encryptor)
 
 	message := []byte("eHdGeExnZEwvMSt3U3dKaFl1WFo0TjVvYzA0eGpjbm5WSkt5MXlsNzhpZ0ZnbWhBWFlQZTRwaXE1bVJCS2oxMDZhYVp2dVN3V0lNZUlWQ3c2eVhQbnhnVjFmeVVubmhRKzF3WnZyWHVNMDg9LS1HSisyakJVSFlPb05ISzRMaXRzcFdBPT0=--831a1d54a3cda8a0658dc668a03dedcbce13b5ca")
@@ -164,7 +164,7 @@ func TestMessageObeysStrictEncoding(t *testing.T) {
 func TestAEADModeEncryption(t *testing.T) {
 	_, _, data, secret := setupME(t)
 
-	encryptor := NewMessageEncryptor(secret, secret, EncryptionCipherAES256GCM)
+	encryptor, _ := NewMessageEncryptor(secret, secret, EncryptionCipherAES256GCM)
 	message, err := encryptor.EncryptAndSign(data, nil, nil)
 	assert.Nil(t, err)
 
@@ -185,13 +185,13 @@ func TestAEADModeWithHMACCBCCipherText(t *testing.T) {
 	expectedPlaintext, err := hex.DecodeString("04087b073a09736f6d6549220964617461063a0645543a086e6f7749753a0954696d650d28801b8000000000073a0b6f666673657469fe808f3a097a6f6e65492208505354063b0646")
 
 	// for completeness, verify that the message is valid
-	oldEncryptor := NewMessageEncryptor(secret[:32], secret, EncryptionCipherAES256CBC)
+	oldEncryptor, _ := NewMessageEncryptor(secret[:32], secret, EncryptionCipherAES256CBC)
 	oldResult, err := oldEncryptor.DecryptAndVerify(oldMessage, nil)
 	assert.Nil(t, err)
 	assert.Equal(t, expectedPlaintext, oldResult)
 
 	// and now validate the _same_ against the GCM one
-	encryptor := NewMessageEncryptor(secret[:32], secret, EncryptionCipherAES256GCM)
+	encryptor, _ := NewMessageEncryptor(secret[:32], secret, EncryptionCipherAES256GCM)
 	assertAEADDecryptionFails(t, encryptor, oldMessage)
 }
 
@@ -199,7 +199,7 @@ func TestAEADModeWithHMACCBCCipherText(t *testing.T) {
 func TestMessingWithAEADValuesCausesFailures(t *testing.T) {
 	_, _, data, secret := setupME(t)
 
-	encryptor := NewMessageEncryptor(secret, secret, EncryptionCipherAES256GCM)
+	encryptor, _ := NewMessageEncryptor(secret, secret, EncryptionCipherAES256GCM)
 	encrypted, err := encryptor.EncryptAndSign(data, nil, nil)
 	assert.Nil(t, err)
 
@@ -227,7 +227,7 @@ func TestMessingWithAEADValuesCausesFailures(t *testing.T) {
 // https://github.com/rails/rails/blob/v5.2.3/activesupport/test/message_encryptor_test.rb#L110
 func TestBackwardsCompatibilityDecryptPreviouslyEncryptedMessagesWithoutMetadata(t *testing.T) {
 	secret := []byte("\xB7\xF0\xBCW\xB1\x18`\xAB\xF0\x81\x10\xA4$\xF44\xEC\xA1\xDC\xC1\xDDD\xAF\xA9\xB8\x14\xCD\x18\x9A\x99 \x80)")
-	encryptor := NewMessageEncryptor(secret, secret, EncryptionCipherAES256GCM)
+	encryptor, _ := NewMessageEncryptor(secret, secret, EncryptionCipherAES256GCM)
 	encryptedMessage := []byte("9cVnFs2O3lL9SPvIJuxBOLS51nDiBMw=--YNI5HAfHEmZ7VDpl--ddFJ6tXA0iH+XGcCgMINYQ==")
 
 	original, err := encryptor.DecryptAndVerify(encryptedMessage, nil)
@@ -241,8 +241,8 @@ func TestRotatingAEADSecret(t *testing.T) {
 	oldSecret := generateSecret(t)
 	newSecret := generateSecret(t)
 
-	oldEncryptor := NewMessageEncryptor(oldSecret, oldSecret, EncryptionCipherAES256GCM)
-	newEncryptor := NewMessageEncryptor(newSecret, newSecret, EncryptionCipherAES256GCM)
+	oldEncryptor, _ := NewMessageEncryptor(oldSecret, oldSecret, EncryptionCipherAES256GCM)
+	newEncryptor, _ := NewMessageEncryptor(newSecret, newSecret, EncryptionCipherAES256GCM)
 
 	oldMessage, err := oldEncryptor.EncryptAndSign([]byte("old"), nil, nil)
 	assert.Nil(t, err)
@@ -262,8 +262,8 @@ func TestRotatingAESCBCSecrets(t *testing.T) {
 	oldSecret := generateSecret(t)
 	newSecret := generateSecret(t)
 
-	oldEncryptor := NewMessageEncryptor(oldSecret, []byte("old sign"), EncryptionCipherAES256CBC)
-	newEncryptor := NewMessageEncryptor(newSecret, newSecret, EncryptionCipherAES256CBC)
+	oldEncryptor, _ := NewMessageEncryptor(oldSecret, []byte("old sign"), EncryptionCipherAES256CBC)
+	newEncryptor, _ := NewMessageEncryptor(newSecret, newSecret, EncryptionCipherAES256CBC)
 
 	oldMessage, err := oldEncryptor.EncryptAndSign([]byte("old"), nil, nil)
 	assert.Nil(t, err)
@@ -281,9 +281,9 @@ func TestMultipleEncryptorRotations(t *testing.T) {
 	oldSecret := generateSecret(t)
 	newSecret := generateSecret(t)
 
-	olderEncryptor := NewMessageEncryptor(olderSecret, []byte("older sign"), EncryptionCipherAES256CBC)
-	oldEncryptor := NewMessageEncryptor(oldSecret, []byte("old sign"), EncryptionCipherAES256CBC)
-	newEncryptor := NewMessageEncryptor(newSecret, newSecret, EncryptionCipherAES256CBC)
+	olderEncryptor, _ := NewMessageEncryptor(olderSecret, []byte("older sign"), EncryptionCipherAES256CBC)
+	oldEncryptor, _ := NewMessageEncryptor(oldSecret, []byte("old sign"), EncryptionCipherAES256CBC)
+	newEncryptor, _ := NewMessageEncryptor(newSecret, newSecret, EncryptionCipherAES256CBC)
 
 	olderMessage, err := olderEncryptor.EncryptAndSign([]byte("older"), nil, nil)
 	assert.Nil(t, err)
@@ -324,12 +324,12 @@ func TestWithRotatedMetadata(t *testing.T) {
 	oldSecret := generateSecret(t)
 	newSecret := generateSecret(t)
 
-	oldEncryptor := NewMessageEncryptor(oldSecret, oldSecret, EncryptionCipherAES256GCM)
+	oldEncryptor, _ := NewMessageEncryptor(oldSecret, oldSecret, EncryptionCipherAES256GCM)
 	oldPurpose := "rotation"
 	oldMessage, err := oldEncryptor.EncryptAndSign([]byte("metadata"), &oldPurpose, nil)
 	assert.Nil(t, err)
 
-	newEncryptor := NewMessageEncryptor(newSecret, newSecret, EncryptionCipherAES256GCM)
+	newEncryptor, _ := NewMessageEncryptor(newSecret, newSecret, EncryptionCipherAES256GCM)
 
 	encryptor := NewRotatingMessageEncryptor(newEncryptor, oldEncryptor)
 
@@ -356,7 +356,7 @@ func TestWithRotatedMetadata(t *testing.T) {
 func TestNoMetadataVerifyWithPurpose(t *testing.T) {
 	secret := generateSecret(t)
 
-	encryptor := NewMessageEncryptor(secret, secret, EncryptionCipherAES256GCM)
+	encryptor, _ := NewMessageEncryptor(secret, secret, EncryptionCipherAES256GCM)
 	message, err := encryptor.EncryptAndSign([]byte("no metadata"), nil, nil)
 	assert.Nil(t, err)
 
@@ -375,7 +375,7 @@ func TestNoMetadataVerifyWithPurpose(t *testing.T) {
 func TestWrongNumberOfComponentsGCM(t *testing.T) {
 	_, _, data, secret := setupME(t)
 
-	encryptor := NewMessageEncryptor(secret, secret, EncryptionCipherAES256GCM)
+	encryptor, _ := NewMessageEncryptor(secret, secret, EncryptionCipherAES256GCM)
 	encrypted, err := encryptor.EncryptAndSign(data, nil, nil)
 	assert.Nil(t, err)
 
@@ -393,7 +393,7 @@ func TestWrongNumberOfComponentsGCM(t *testing.T) {
 func TestWrongNumberOfComponentsCBC(t *testing.T) {
 	verifier, _, data, secret := setupME(t)
 
-	encryptor := NewMessageEncryptor(secret, secret, EncryptionCipherAES256CBC)
+	encryptor, _ := NewMessageEncryptor(secret, secret, EncryptionCipherAES256CBC)
 	encryptedAndVerified, err := encryptor.EncryptAndSign(data, nil, nil)
 	assert.Nil(t, err)
 

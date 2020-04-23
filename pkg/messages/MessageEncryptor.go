@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -56,6 +57,8 @@ type RailsMessageEncryptor struct {
 	encryptionSecret []byte
 	signingSecret    []byte
 	cipher           string
+	block            cipher.Block
+	aead             cipher.AEAD
 
 	verifier MessageVerifier
 }
@@ -69,29 +72,39 @@ const (
 	RailsDefaultNonAuthenticatedMessageEncryptionCipher = EncryptionCipherAES256CBC
 )
 
-func NewMessageEncryptor(encryptionSecret []byte, signingSecret []byte, cipher string) MessageEncryptor {
+func NewMessageEncryptor(encryptionSecret []byte, signingSecret []byte, cipherString string) (MessageEncryptor, error) {
 	me := &RailsMessageEncryptor{
 		encryptionSecret: encryptionSecret,
 		signingSecret:    signingSecret,
-		cipher:           cipher,
+		cipher:           cipherString,
 	}
 
-	switch cipher {
+	var err error
+	me.block, err = aes.NewCipher(me.encryptionSecret)
+	if err != nil {
+		return nil, err
+	}
+
+	switch cipherString {
 	case EncryptionCipherAES256GCM:
 		// GCM is:
 		//  "AEAD is a cipher mode providing authenticated encryption with associated data"
 		// rails turns off the message verifier when using GCM
 		// see: https://github.com/rails/rails/blob/v5.2.3/activesupport/lib/active_support/message_encryptor.rb#L222
 		me.verifier = NewMessageVerifierNull()
+		me.aead, err = cipher.NewGCM(me.block)
+		if err != nil {
+			return nil, err
+		}
 	case EncryptionCipherAES256CBC:
 		// CBC doesn't have verification so we use the SHA1 to match rails
 		// see: https://github.com/rails/rails/blob/v5.2.3/activesupport/lib/active_support/message_encryptor.rb#L225
 		me.verifier = NewMessageVerifierSHA1(signingSecret)
 	default:
-		return nil
+		return nil, errors.New(fmt.Sprintf("Unsupported cipher %s", cipherString))
 	}
 
-	return me
+	return me, nil
 }
 
 func GetMessageEncryptorKeyLength(cipher string) int {
@@ -128,11 +141,6 @@ func (me *RailsMessageEncryptor) DecryptAndVerify(encrypted []byte, purpose *str
 }
 
 func (me *RailsMessageEncryptor) encrypt(message []byte, purpose *string, expiresAt *time.Time) ([]byte, error) {
-	block, err := aes.NewCipher(me.encryptionSecret)
-	if err != nil {
-		return nil, err
-	}
-
 	plaintext, err := WrapMessageWithMetadata(message, purpose, expiresAt)
 	if err != nil {
 		return nil, err
@@ -140,19 +148,14 @@ func (me *RailsMessageEncryptor) encrypt(message []byte, purpose *string, expire
 
 	switch me.cipher {
 	case EncryptionCipherAES256GCM:
-		aesgcm, err := cipher.NewGCM(block)
-		if err != nil {
-			return nil, err
-		}
-
 		// from https://golang.org/pkg/crypto/cipher/#NewGCM
 		// the NonceSize is noted as the thing to use in: https://golang.org/pkg/crypto/cipher/#AEAD
-		nonce := make([]byte, aesgcm.NonceSize())
+		nonce := make([]byte, me.aead.NonceSize())
 		if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 			return nil, err
 		}
 
-		encryptedAndTag := aesgcm.Seal(nil, nonce, plaintext, nil)
+		encryptedAndTag := me.aead.Seal(nil, nonce, plaintext, nil)
 
 		encryptedData := encryptedAndTag[:len(plaintext)]
 		authTag := encryptedAndTag[len(plaintext):]
@@ -162,13 +165,13 @@ func (me *RailsMessageEncryptor) encrypt(message []byte, purpose *string, expire
 		// see: https://github.com/rails/rails/blob/v5.2.3/activesupport/lib/active_support/message_encryptor.rb#L179
 		return joinAndBase64Bytes(encryptedData, nonce, authTag), nil
 	case EncryptionCipherAES256CBC:
-		iv := make([]byte, block.BlockSize())
+		iv := make([]byte, me.block.BlockSize())
 		if _, err := io.ReadFull(rand.Reader, iv); err != nil {
 			return nil, err
 		}
-		mode := cipher.NewCBCEncrypter(block, iv)
+		mode := cipher.NewCBCEncrypter(me.block, iv)
 
-		padder := pad.NewPKCS7(block.BlockSize())
+		padder := pad.NewPKCS7(me.block.BlockSize())
 		padded := padder.Pad(plaintext)
 
 		encryptedData := make([]byte, len(padded))
@@ -183,11 +186,6 @@ func (me *RailsMessageEncryptor) encrypt(message []byte, purpose *string, expire
 }
 
 func (me *RailsMessageEncryptor) decrypt(message []byte, purpose *string) ([]byte, error) {
-	block, err := aes.NewCipher(me.encryptionSecret)
-	if err != nil {
-		return nil, err
-	}
-
 	components, err := splitAndUnBase64Bytes(message)
 	if err != nil {
 		return nil, err
@@ -205,12 +203,7 @@ func (me *RailsMessageEncryptor) decrypt(message []byte, purpose *string) ([]byt
 		nonce := components[1]
 		authTag := components[2]
 
-		aesgcm, err := cipher.NewGCM(block)
-		if err != nil {
-			return nil, err
-		}
-
-		if len(nonce) != aesgcm.NonceSize() {
+		if len(nonce) != me.aead.NonceSize() {
 			// rails doesn't check this one, but worth being safe
 			// see: https://github.com/rails/rails/blob/v5.2.3/activesupport/lib/active_support/message_encryptor.rb#L190
 			return nil, errors.New("iv had incorrect length")
@@ -224,7 +217,7 @@ func (me *RailsMessageEncryptor) decrypt(message []byte, purpose *string) ([]byt
 
 		// match back to go's concatenated data+authtag
 		compatCrypt := append(encryptedData, authTag...)
-		plaintext, err = aesgcm.Open(nil, nonce, compatCrypt, nil)
+		plaintext, err = me.aead.Open(nil, nonce, compatCrypt, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -236,17 +229,17 @@ func (me *RailsMessageEncryptor) decrypt(message []byte, purpose *string) ([]byt
 		encryptedData := components[0]
 		iv := components[1]
 
-		if len(iv) != block.BlockSize() {
+		if len(iv) != me.block.BlockSize() {
 			// rails doesn't check this one, but worth being safe
 			// see: https://github.com/rails/rails/blob/v5.2.3/activesupport/lib/active_support/message_encryptor.rb#L190
 			return nil, errors.New("iv had incorrect length")
 		}
 
-		mode := cipher.NewCBCDecrypter(block, iv)
+		mode := cipher.NewCBCDecrypter(me.block, iv)
 		plaintext = make([]byte, len(encryptedData))
 		mode.CryptBlocks(plaintext, encryptedData)
 
-		padder := pad.NewPKCS7(block.BlockSize())
+		padder := pad.NewPKCS7(me.block.BlockSize())
 		plaintext, err = padder.Unpad(plaintext)
 		if err != nil {
 			return nil, err
